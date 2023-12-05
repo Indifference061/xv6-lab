@@ -387,7 +387,7 @@ bmap(struct inode *ip, uint bn)
 
   if(bn < NDIRECT){
     if((addr = ip->addrs[bn]) == 0){
-      addr = balloc(ip->dev);
+      addr = balloc(ip->dev); // Allocate a zeroed disk block.
       if(addr == 0)
         return 0;
       ip->addrs[bn] = addr;
@@ -396,9 +396,9 @@ bmap(struct inode *ip, uint bn)
   }
   bn -= NDIRECT;
 
-  if(bn < NINDIRECT){
+  if(bn < S_NINDIRECT){
     // Load indirect block, allocating if necessary.
-    if((addr = ip->addrs[NDIRECT]) == 0){
+    if((addr = ip->addrs[NDIRECT]) == 0){ 
       addr = balloc(ip->dev);
       if(addr == 0)
         return 0;
@@ -417,6 +417,45 @@ bmap(struct inode *ip, uint bn)
     return addr;
   }
 
+  bn-=S_NINDIRECT;
+  if(bn<D_NINDIRECT)
+  {
+    int index=bn/S_NINDIRECT;
+    int offset=bn%S_NINDIRECT;
+    if((addr = ip->addrs[NDIRECT+1])==0) //先分配二阶指针的一阶结点
+    {
+      addr = balloc(ip->dev);
+      if(addr == 0)
+        return 0;
+      ip->addrs[NDIRECT+1] = addr;
+    }
+    bp=bread(ip->dev, addr); //读取一级间接块内容
+    a = (uint*)bp->data;
+    if((addr=a[index])==0)
+    {
+      addr=balloc(ip->dev);
+      if(addr)
+      {
+        a[index] = addr;
+        log_write(bp);
+      }      
+    }
+    brelse(bp);
+
+    bp=bread(ip->dev, addr);
+    a = (uint*)bp->data;
+    if((addr=a[offset])==0)
+    {
+      addr=balloc(ip->dev);
+      if(addr)
+      {
+        a[offset] = addr;
+        log_write(bp);
+      }      
+    }
+    brelse(bp);
+    return addr;
+  }
   panic("bmap: out of range");
 }
 
@@ -439,7 +478,7 @@ itrunc(struct inode *ip)
   if(ip->addrs[NDIRECT]){
     bp = bread(ip->dev, ip->addrs[NDIRECT]);
     a = (uint*)bp->data;
-    for(j = 0; j < NINDIRECT; j++){
+    for(j = 0; j < S_NINDIRECT; j++){
       if(a[j])
         bfree(ip->dev, a[j]);
     }
@@ -448,6 +487,29 @@ itrunc(struct inode *ip)
     ip->addrs[NDIRECT] = 0;
   }
 
+  if(ip->addrs[NDIRECT+1])
+  {
+    bp=bread(ip->dev,ip->addrs[NDIRECT+1]);
+    a=(uint*)bp->data;
+    struct buf *bpd;
+    uint* b;
+    for(int j=0;j<S_NINDIRECT;j++)
+    {
+      if(a[j])
+      {
+        bpd=bread(ip->dev,a[j]);
+        b=(uint*)bpd->data;
+        for(int k=0;k<S_NINDIRECT;k++)
+        {
+          if(b[k])
+            bfree(ip->dev,b[k]);
+        }
+      }
+    }
+    brelse(bp);
+    bfree(ip->dev, ip->addrs[NDIRECT+1]);
+    ip->addrs[NDIRECT+1] = 0;
+  }
   ip->size = 0;
   iupdate(ip);
 }
